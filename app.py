@@ -1,11 +1,12 @@
 import streamlit as st
 import google.generativeai as genai
 import pandas as pd
+import io
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
-    page_title="Estructurador de Datos RAG",
-    page_icon="🏗️",
+    page_title="Taller de Datos RAG",
+    page_icon="🛠️",
     layout="wide"
 )
 
@@ -17,106 +18,135 @@ except (KeyError, FileNotFoundError):
     st.warning("Por favor, configura el 'Secreto' de Streamlit llamado `GEMINI_API_KEY`.")
     st.stop()
 
+# --- INICIALIZACIÓN DEL ESTADO DE LA SESIÓN ---
+# Usamos el estado de la sesión para mantener los datos entre interacciones
+if 'original_content' not in st.session_state:
+    st.session_state.original_content = ""
+if 'structured_text' not in st.session_state:
+    st.session_state.structured_text = "El resultado estructurado por la IA aparecerá aquí..."
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
+
 # --- INTERFAZ DE LA APLICACIÓN ---
-st.title("🏗️ Estructurador de Documentos para IA (RAG)")
-st.markdown(
-    "Pega texto sin formato o sube un archivo de Excel. La IA lo analizará y lo convertirá "
-    "a formato **Markdown**, optimizado para bases de conocimiento RAG."
-)
+st.title("🛠️ Taller de Estructuración de Datos para IA (RAG)")
+st.markdown("Sube o pega tu contenido, visualízalo, edítalo y usa un asistente de IA para refinarlo. Finalmente, descarga tu documento en formato Markdown.")
 
-# Columnas para la entrada y el resultado
-col1, col2 = st.columns(2)
+# --- PANELES PRINCIPALES ---
+col1, col2, col3 = st.columns([1, 1, 1])
 
+# --- COLUMNA 1: ENTRADA Y VISUALIZACIÓN ---
 with col1:
     with st.container(border=True):
-        st.subheader("1. Proporciona tu Información")
+        st.subheader("1. Carga y Visualiza")
         
-        # Pestañas para elegir el método de entrada
         input_method_tab, file_upload_tab = st.tabs(["Pegar Texto", "Subir Archivo Excel"])
 
         with input_method_tab:
-            unstructured_text = st.text_area(
-                "Texto sin formato",
-                height=350,
-                placeholder="Pega aquí el contenido de un correo, un reporte, notas, etc."
-            )
-        
+            text_input = st.text_area("Pega texto sin formato aquí", height=150)
+            if text_input:
+                st.session_state.original_content = text_input
+
         with file_upload_tab:
-            uploaded_file = st.file_uploader(
-                "Sube un archivo .xlsx",
-                type=['xlsx']
-            )
-
-        process_button = st.button("Estructurar Documento", type="primary", use_container_width=True)
-
-with col2:
-    with st.container(border=True):
-        st.subheader("2. Resultado Estructurado (Markdown)")
-        
-        if 'structured_text' not in st.session_state:
-            st.session_state.structured_text = "El resultado aparecerá aquí. Puedes editarlo antes de copiarlo."
-
-        if process_button:
-            source_text = ""
-            # Prioriza el archivo subido si existe
-            if uploaded_file is not None:
+            uploaded_file = st.file_uploader("Sube un archivo .xlsx", type=['xlsx'])
+            if uploaded_file:
                 try:
-                    # Lee todas las hojas del archivo Excel
                     xls = pd.ExcelFile(uploaded_file)
-                    full_text_parts = []
-                    for sheet_name in xls.sheet_names:
-                        df = pd.read_excel(xls, sheet_name=sheet_name)
-                        # Ignora hojas vacías
-                        if not df.empty:
-                            full_text_parts.append(f"## Hoja: {sheet_name}\n\n")
-                            # Convierte el dataframe a una tabla Markdown
-                            full_text_parts.append(df.to_markdown(index=False))
-                            full_text_parts.append("\n\n")
-                    source_text = "".join(full_text_parts)
-                    st.info(f"Archivo '{uploaded_file.name}' leído correctamente.")
+                    sheet_to_display = st.selectbox("Selecciona una hoja para visualizar", xls.sheet_names)
+                    if sheet_to_display:
+                        df = pd.read_excel(xls, sheet_name=sheet_to_display)
+                        st.dataframe(df)
+                        # Guarda todo el contenido del excel para procesarlo
+                        full_excel_text = []
+                        for name in xls.sheet_names:
+                            sheet_df = pd.read_excel(xls, sheet_name=name)
+                            if not sheet_df.empty:
+                                full_excel_text.append(f"## Hoja: {name}\n\n{sheet_df.to_markdown(index=False)}\n\n")
+                        st.session_state.original_content = "".join(full_excel_text)
                 except Exception as e:
-                    st.error(f"Error al procesar el archivo Excel: {e}")
-            
-            # Si no hay archivo, usa el texto pegado
-            elif unstructured_text.strip():
-                source_text = unstructured_text
-            
-            # Si no hay ninguna entrada, muestra una advertencia
-            else:
-                st.warning("Por favor, pega texto o sube un archivo para procesar.")
-                source_text = None
+                    st.error(f"Error al leer el archivo: {e}")
 
-            if source_text:
-                with st.spinner("🤖 Analizando y reestructurando el texto..."):
+        if st.button("Procesar y Estructurar", use_container_width=True, type="primary"):
+            if st.session_state.original_content:
+                with st.spinner("🤖 Estructurando el documento inicial..."):
                     try:
                         model = genai.GenerativeModel('gemini-1.5-flash-latest')
                         prompt = f"""
-                        Tu tarea es actuar como un experto en gestión del conocimiento.
-                        Analiza el siguiente texto, que puede ser texto plano o datos de una hoja de cálculo en formato Markdown. Tu objetivo es reestructurarlo en un documento Markdown claro y jerárquico, optimizado para una IA (RAG).
-
-                        Sigue estas reglas estrictamente:
-                        1.  **Crea un Título Principal:** Usa un encabezado de nivel 1 (`#`) para el tema general.
-                        2.  **Genera un Resumen Ejecutivo:** Escribe un breve párrafo que resuma los puntos clave del documento.
-                        3.  **Crea Secciones Lógicas:** Usa encabezados de nivel 2 (`##`) para los subtemas principales. Si los datos vienen de hojas de cálculo, usa los nombres de las hojas como guía.
-                        4.  **Utiliza Listas:** Convierte enumeraciones o grupos de elementos en listas con viñetas (`-`).
-                        5.  **Resalta Datos Clave:** Identifica y resalta la información más importante (nombres, fechas, cifras, conclusiones) usando texto en negrita (`**dato**`).
-                        6.  **Sé Conciso:** Elimina redundancias. Mantén la esencia de la información.
+                        Analiza el siguiente texto y reestructúralo en formato Markdown. 
+                        Crea un título, un resumen y secciones lógicas. Resalta los datos clave en negrita.
 
                         --- TEXTO ORIGINAL ---
-                        {source_text}
+                        {st.session_state.original_content}
                         --- FIN DEL TEXTO ---
                         """
                         response = model.generate_content(prompt)
                         st.session_state.structured_text = response.text
-                        st.success("¡Texto estructurado!")
+                        st.success("¡Documento estructurado!")
                     except Exception as e:
-                        st.error(f"Ocurrió un error al contactar a Gemini: {e}")
-                        st.session_state.structured_text = "Error al procesar el texto."
+                        st.error(f"Error en la estructuración inicial: {e}")
+            else:
+                st.warning("Por favor, pega texto o sube un archivo.")
 
-        # El text_area permite al usuario editar el resultado
-        st.text_area(
-            "Resultado en Markdown (Editable)",
+# --- COLUMNA 2: EDITOR DE MARKDOWN ---
+with col2:
+    with st.container(border=True):
+        st.subheader("2. Edita el Resultado")
+        
+        edited_text = st.text_area(
+            "Puedes editar el texto directamente aquí",
             value=st.session_state.structured_text,
-            height=400,
-            key="editable_result"
+            height=500,
+            key="editor"
         )
+        # Actualiza el estado si el usuario edita manualmente
+        st.session_state.structured_text = edited_text
+
+        st.download_button(
+            label="📥 Descargar Archivo .md",
+            data=st.session_state.structured_text,
+            file_name="documento_estructurado.md",
+            mime="text/markdown",
+            use_container_width=True
+        )
+
+# --- COLUMNA 3: ASISTENTE DE IA ---
+with col3:
+    with st.container(border=True):
+        st.subheader("3. Asistente de Edición")
+        
+        # Muestra el historial del chat
+        for message in st.session_state.chat_history:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+        # Entrada del usuario para el chat
+        if instruction := st.chat_input("Da una instrucción para editar..."):
+            # Añade el mensaje del usuario al historial
+            st.session_state.chat_history.append({"role": "user", "content": instruction})
+            with st.chat_message("user"):
+                st.markdown(instruction)
+
+            # Llama a la IA para que edite el documento
+            with st.spinner("✍️ La IA está editando el documento..."):
+                try:
+                    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                    prompt = f"""
+                    Actúa como un editor de documentos. Tu tarea es modificar el 'DOCUMENTO ACTUAL' basándote en la 'INSTRUCCIÓN DEL USUARIO'.
+                    Debes devolver el **documento completo y modificado**, no solo una respuesta a la instrucción.
+
+                    --- DOCUMENTO ACTUAL ---
+                    {st.session_state.structured_text}
+                    --- FIN DEL DOCUMENTO ---
+
+                    --- INSTRUCCIÓN DEL USUARIO ---
+                    {instruction}
+                    --- FIN DE LA INSTRUCCIÓN ---
+                    """
+                    response = model.generate_content(prompt)
+                    
+                    # Actualiza el editor con el nuevo texto y limpia el historial para la próxima tarea
+                    st.session_state.structured_text = response.text
+                    st.session_state.chat_history = [] # Limpia el historial para la siguiente instrucción
+                    st.rerun() # Refresca la app para mostrar los cambios en el editor
+
+                except Exception as e:
+                    st.error(f"Error al editar con la IA: {e}")
