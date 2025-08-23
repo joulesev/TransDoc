@@ -2,11 +2,12 @@ import streamlit as st
 import google.generativeai as genai
 import pandas as pd
 import json
+import re
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
-    page_title="Taller de Datos RAG v2",
-    page_icon=" directing_traffic",
+    page_title="Taller de Datos RAG v3",
+    page_icon="🛠️",
     layout="wide"
 )
 
@@ -19,6 +20,7 @@ except (KeyError, FileNotFoundError):
     st.stop()
 
 # --- DEFINICIÓN DEL ESQUEMA JSON ---
+# Este es el "formulario" que la IA debe rellenar.
 SCHEMA = {
     "type": "OBJECT",
     "properties": {
@@ -50,8 +52,10 @@ SCHEMA = {
     "required": ["title", "summary", "sections", "key_data_points"]
 }
 
-# --- FUNCIÓN PARA CONVERTIR JSON A MARKDOWN ---
+# --- FUNCIONES AUXILIARES ---
+
 def json_to_markdown(data):
+    """Convierte el objeto JSON estructurado en un string de Markdown legible."""
     md_parts = []
     md_parts.append(f"# {data.get('title', 'Sin Título')}\n")
     md_parts.append(f"**Resumen:** {data.get('summary', 'No disponible.')}\n")
@@ -66,6 +70,16 @@ def json_to_markdown(data):
             md_parts.append(f"{section.get('content', '')}\n")
     return "\n".join(md_parts)
 
+def extract_json_from_markdown(md_string):
+    """Extrae un bloque de código JSON de un string de Markdown."""
+    match = re.search(r"```json\n(.*)\n```", md_string, re.DOTALL)
+    if match:
+        return match.group(1)
+    # Intenta encontrar el JSON incluso si no está en un bloque de código
+    if md_string.strip().startswith('{'):
+        return md_string
+    return None
+
 # --- INICIALIZACIÓN DEL ESTADO DE LA SESIÓN ---
 if 'structured_text' not in st.session_state:
     st.session_state.structured_text = "El resultado aparecerá aquí."
@@ -73,37 +87,39 @@ if 'original_content' not in st.session_state:
     st.session_state.original_content = ""
 
 # --- INTERFAZ DE LA APLICACIÓN ---
-st.title(" directing_traffic Taller de Estructuración de Datos Dirigido por IA")
-st.markdown("Carga tu documento, dale instrucciones a la IA sobre cómo procesarlo y obtén un resultado estructurado y consistente.")
+st.title("🛠️ Taller de Estructuración de Datos Dirigido por IA")
+st.markdown("Carga tu documento, dale instrucciones a la IA y obtén un resultado estructurado y consistente.")
 
 col1, col2 = st.columns(2, gap="large")
 
 # --- COLUMNA 1: ENTRADA E INSTRUCCIONES ---
 with col1:
     st.subheader("1. Carga tu Documento")
-    with st.container(border=True, height=300):
-        input_method_tab, file_upload_tab = st.tabs(["Pegar Texto", "Subir Archivo Excel"])
-        with input_method_tab:
-            text_input = st.text_area("Pega texto aquí", height=200)
-            if text_input:
-                st.session_state.original_content = text_input
-        with file_upload_tab:
-            uploaded_file = st.file_uploader("Sube un archivo .xlsx", type=['xlsx'])
-            if uploaded_file:
-                try:
-                    xls = pd.ExcelFile(uploaded_file)
-                    parts = [f"## Hoja: {name}\n\n{pd.read_excel(xls, name).to_markdown(index=False)}\n" for name in xls.sheet_names]
-                    st.session_state.original_content = "".join(parts)
-                except Exception as e:
-                    st.error(f"Error al leer el archivo: {e}")
-    
+    input_method_tab, file_upload_tab = st.tabs(["Pegar Texto", "Subir Archivo Excel"])
+    with input_method_tab:
+        text_input = st.text_area("Pega texto aquí", height=150, key="text_input_area")
+        if text_input:
+            st.session_state.original_content = text_input
+    with file_upload_tab:
+        uploaded_file = st.file_uploader("Sube un archivo .xlsx", type=['xlsx'])
+        if uploaded_file:
+            try:
+                xls = pd.ExcelFile(uploaded_file)
+                parts = [f"## Hoja: {name}\n\n{pd.read_excel(xls, name).to_markdown(index=False)}\n" for name in xls.sheet_names]
+                st.session_state.original_content = "".join(parts)
+            except Exception as e:
+                st.error(f"Error al leer el archivo: {e}")
+
+    st.subheader("Vista Previa del Contenido Original")
+    with st.container(border=True, height=200):
+        st.markdown(f"<div style='height:180px;overflow-y:scroll;'>{st.session_state.original_content}</div>", unsafe_allow_html=True)
+
     st.subheader("2. Da Instrucciones a la IA (Opcional)")
-    with st.container(border=True, height=300):
-        instructions = st.text_area(
-            "Describe cómo debe procesar el documento.",
-            placeholder="Ej: 'Extrae solo los nombres y las fechas clave.' o 'Enfócate en la sección de riesgos y resume cada punto en una frase.'",
-            height=200
-        )
+    instructions = st.text_area(
+        "Describe cómo debe procesar el documento.",
+        placeholder="Ej: 'Extrae solo los nombres y las fechas clave.'",
+        height=150
+    )
 
 # --- COLUMNA 2: PROCESAMIENTO Y RESULTADO ---
 with col2:
@@ -114,34 +130,38 @@ with col2:
     with st.container(border=True, height=520):
         if process_button:
             if st.session_state.original_content:
-                with st.spinner("🤖 La IA está procesando el documento según tus instrucciones..."):
+                with st.spinner("🤖 La IA está procesando el documento..."):
                     try:
                         model = genai.GenerativeModel('gemini-1.5-flash-latest')
-                        generation_config = genai.types.GenerationConfig(
-                            response_mime_type="application/json",
-                            response_schema=SCHEMA
-                        )
                         
                         user_instructions = instructions if instructions.strip() else "Procede con el análisis estándar."
                         
                         prompt = f"""
-                        Tu tarea es actuar como un analista de datos experto.
-                        Primero, lee las 'INSTRUCCIONES DEL USUARIO' para entender el objetivo del análisis.
-                        Luego, analiza el 'TEXTO ORIGINAL' siguiendo esas instrucciones.
-                        Finalmente, extrae la información resultante y rellena de forma estricta y completa el esquema JSON proporcionado.
+                        Tu tarea es actuar como un analista de datos.
+                        Lee las 'INSTRUCCIONES DEL USUARIO' y el 'TEXTO ORIGINAL'.
+                        Extrae la información solicitada y devuélvela como un objeto JSON que siga estrictamente el esquema proporcionado.
+                        Envuelve el objeto JSON final en un bloque de código Markdown ```json ... ```.
 
-                        --- INSTRUCCIONES DEL USUARIO ---
+                        ESQUEMA JSON:
+                        {json.dumps(SCHEMA, indent=2)}
+
+                        INSTRUCCIONES DEL USUARIO:
                         {user_instructions}
 
-                        --- TEXTO ORIGINAL ---
+                        TEXTO ORIGINAL:
                         {st.session_state.original_content}
-                        --- FIN DEL TEXTO ---
                         """
                         
-                        response = model.generate_content(prompt, generation_config=generation_config)
-                        structured_json = json.loads(response.text)
-                        st.session_state.structured_text = json_to_markdown(structured_json)
-                        st.success("¡Documento procesado!")
+                        response = model.generate_content(prompt)
+                        json_string = extract_json_from_markdown(response.text)
+                        
+                        if json_string:
+                            structured_json = json.loads(json_string)
+                            st.session_state.structured_text = json_to_markdown(structured_json)
+                            st.success("¡Documento procesado!")
+                        else:
+                            st.error("La IA no devolvió un JSON válido. Su respuesta fue:")
+                            st.write(response.text)
 
                     except Exception as e:
                         st.error(f"Ocurrió un error: {e}")
