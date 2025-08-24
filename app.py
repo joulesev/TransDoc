@@ -3,6 +3,10 @@ import google.generativeai as genai
 import pandas as pd
 import io
 
+# --- CONFIGURACIÓN DE PANDAS ---
+# Le damos la orden a pandas de que nunca oculte filas al convertir a texto.
+pd.set_option('display.max_rows', None)
+
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
     page_title="Taller de Datos RAG",
@@ -19,7 +23,6 @@ except (KeyError, FileNotFoundError):
     st.stop()
 
 # --- INICIALIZACIÓN DEL ESTADO DE LA SESIÓN ---
-# Usamos el estado de la sesión para mantener los datos entre interacciones
 if 'original_content' not in st.session_state:
     st.session_state.original_content = ""
 if 'structured_text' not in st.session_state:
@@ -71,8 +74,8 @@ with col1:
                     try:
                         model = genai.GenerativeModel('gemini-1.5-flash-latest')
                         prompt = f"""
-                        Analiza el siguiente texto y reestructúralo completo, sin omitir nada, en formato Markdown. 
-                        Despues, en en otra sección, crea un título,un resumen y secciones lógicas. Resalta los datos clave en negrita.
+                        Analiza el siguiente texto y reestructúralo en formato Markdown. 
+                        Crea un título, un resumen y secciones lógicas. Resalta los datos clave en negrita.
 
                         --- TEXTO ORIGINAL ---
                         {st.session_state.original_content}
