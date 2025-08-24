@@ -4,9 +4,9 @@ import pandas as pd
 import io
 
 # --- CONFIGURACIÓN DE PANDAS ---
-# Le damos la orden a pandas de que nunca oculte filas al convertir a texto.
+# Le damos la orden a pandas de que nunca oculte filas NI TRUNQUE EL TEXTO en las columnas.
 pd.set_option('display.max_rows', None)
-pd.set_option('display.max_columns', None)
+pd.set_option('display.max_colwidth', None)
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
