@@ -58,21 +58,19 @@ with col1:
                     sheet_to_display = st.selectbox("Selecciona una hoja para visualizar", xls.sheet_names)
                     if sheet_to_display:
                         df = pd.read_excel(xls, sheet_name=sheet_to_display)
-                        st.dataframe(df)
-                        # Guarda todo el contenido del excel para procesarlo
-                        full_excel_text_parts = []
+                        st.dataframe(df) # Muestra el dataframe original tal como se lee
+                        
+                        # Guarda todo el contenido del excel para procesarlo, aplicando la corrección
+                        full_excel_text = []
                         for name in xls.sheet_names:
                             sheet_df = pd.read_excel(xls, sheet_name=name)
                             if not sheet_df.empty:
-                                full_excel_text_parts.append(f"## Hoja: {name}\n\n{sheet_df.to_markdown(index=False)}\n\n")
-                        
-                        full_excel_text = "".join(full_excel_text_parts)
-                        
-                        # --- FILTRO DE SANEAMIENTO AÑADIDO ---
-                        # Elimina líneas de resumen conocidas que pueden ser insertadas por herramientas externas.
-                        summary_line_to_remove = "*(Se omitieron filas repetitivas para brevedad. El total de llegadas se muestra al final.)*"
-                        st.session_state.original_content = full_excel_text.replace(summary_line_to_remove, "")
-
+                                # --- LÍNEA CLAVE DE LA CORRECCIÓN ---
+                                # Rellena las celdas vacías (NaN) con el valor de la celda superior
+                                sheet_df.fillna(method='ffill', inplace=True)
+                                
+                                full_excel_text.append(f"## Hoja: {name}\n\n{sheet_df.to_markdown(index=False)}\n\n")
+                        st.session_state.original_content = "".join(full_excel_text)
                 except Exception as e:
                     st.error(f"Error al leer el archivo: {e}")
 
@@ -82,8 +80,8 @@ with col1:
                     try:
                         model = genai.GenerativeModel('gemini-1.5-flash-latest')
                         prompt = f"""
-                        Analiza el siguiente texto y reestructúralo completo, sin omitir informacion en formato Markdown. 
-                        Despues, en una seccion nueva, crea un título, un resumen y secciones lógicas. Resalta los datos clave en negrita.
+                        Analiza el siguiente texto y reestructúralo en formato Markdown. 
+                        Crea un título, un resumen y secciones lógicas. Resalta los datos clave en negrita.
 
                         --- TEXTO ORIGINAL ---
                         {st.session_state.original_content}
