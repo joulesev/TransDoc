@@ -6,6 +6,7 @@ import io
 # --- CONFIGURACIÓN DE PANDAS ---
 # Le damos la orden a pandas de que nunca oculte filas al convertir a texto.
 pd.set_option('display.max_rows', None)
+pd.set_option('display.max_columns', None)
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
