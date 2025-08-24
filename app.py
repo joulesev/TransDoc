@@ -71,7 +71,7 @@ with col1:
                     try:
                         model = genai.GenerativeModel('gemini-1.5-flash-latest')
                         prompt = f"""
-                        Analiza el siguiente texto y reestructúralo en formato Markdown. 
+                        Analiza el siguiente texto y reestructúralo completo, No omitas informacion, en formato Markdown. 
                         Crea un título, un resumen y secciones lógicas. Resalta los datos clave en negrita.
 
                         --- TEXTO ORIGINAL ---
