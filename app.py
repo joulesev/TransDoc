@@ -80,8 +80,9 @@ with col1:
                         prompt = f"""
                         Tu tarea es actuar como un experto analista de datos.
                         Analiza el siguiente texto, que proviene de un archivo Excel.
-                        IMPORTANTE: El texto puede contener filas con datos faltantes. Esto se debe a que en el Excel original, las celdas estaban combinadas.
-                        Tu primer paso es "rellenar mentalmente" esos huecos. Si una fila tiene una celda vacía, asume que su valor es el mismo que el de la celda superior en la misma columna que sí tenía un valor.
+                        IMPORTANTE: El texto puede contener filas con datos faltantes. Esto se debe a que en el Excel original, hay celdas estaban combinadas.
+                        Tu primer paso es "rellenar mentalmente" los huecos en esas celdas combinadas con la informacion en la celda de la primera fila de ese grupo de celdas combinadas.
+                        No omitas ningun dato. 
 
                         Una vez que hayas reconstruido la información completa, reestructura el contenido en un formato Markdown claro y útil.
                         Crea un título general, un resumen ejecutivo conciso y secciones lógicas para cada hoja o tema.
