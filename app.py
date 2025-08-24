@@ -2,9 +2,9 @@ import streamlit as st
 import google.generativeai as genai
 import pandas as pd
 import io
+from openpyxl import load_workbook
 
 # --- CONFIGURACIÓN DE PANDAS ---
-# Le damos la orden a pandas de que nunca oculte filas NI TRUNQUE EL TEXTO en las columnas.
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_colwidth', None)
 
@@ -23,6 +23,46 @@ except (KeyError, FileNotFoundError):
     st.warning("Por favor, configura el 'Secreto' de Streamlit llamado `GEMINI_API_KEY`.")
     st.stop()
 
+# --- NUEVA FUNCIÓN DE PROCESAMIENTO INTELIGENTE ---
+def process_excel_file(uploaded_file):
+    """
+    Lee un archivo Excel, detecta las celdas combinadas, las rellena de forma inteligente
+    y devuelve el contenido completo como texto Markdown.
+    """
+    # Carga el libro de trabajo con openpyxl para leer la estructura
+    wb = load_workbook(uploaded_file, read_only=True)
+    xls = pd.ExcelFile(uploaded_file)
+    
+    full_excel_text = []
+
+    for sheet_name in xls.sheet_names:
+        ws = wb[sheet_name]
+        df = pd.read_excel(xls, sheet_name=sheet_name, header=None) # Leer sin cabecera para alinear índices
+
+        # Obtiene el mapa de celdas combinadas
+        merged_ranges = ws.merged_cells.ranges
+
+        # Aplica el relleno inteligente
+        for merged_range in merged_ranges:
+            # Obtiene los límites del rango (min_col, min_row, max_col, max_row)
+            # Los índices de openpyxl empiezan en 1, los de pandas en 0
+            min_col, min_row, max_col, max_row = merged_range.bounds
+            top_left_cell_value = df.iloc[min_row - 1, min_col - 1]
+            
+            # Rellena el rango en el DataFrame
+            df.iloc[min_row - 1:max_row, min_col - 1:max_col] = top_left_cell_value
+        
+        # Asigna la primera fila como cabecera y elimina la fila original
+        df.columns = df.iloc[0]
+        df = df[1:]
+        df.reset_index(drop=True, inplace=True)
+
+        if not df.empty:
+            full_excel_text.append(f"## Hoja: {sheet_name}\n\n{df.to_markdown(index=False)}\n\n")
+            
+    return "".join(full_excel_text)
+
+
 # --- INICIALIZACIÓN DEL ESTADO DE LA SESIÓN ---
 if 'original_content' not in st.session_state:
     st.session_state.original_content = ""
@@ -35,7 +75,6 @@ if 'chat_history' not in st.session_state:
 st.title("🛠️ Taller de Estructuración de Datos para IA (RAG)")
 st.markdown("Sube o pega tu contenido, visualízalo, edítalo y usa un asistente de IA para refinarlo. Finalmente, descarga tu documento en formato Markdown.")
 
-# --- PANELES PRINCIPALES ---
 col1, col2, col3 = st.columns([1, 1, 1])
 
 # --- COLUMNA 1: ENTRADA Y VISUALIZACIÓN ---
@@ -54,23 +93,15 @@ with col1:
             uploaded_file = st.file_uploader("Sube un archivo .xlsx", type=['xlsx'])
             if uploaded_file:
                 try:
-                    xls = pd.ExcelFile(uploaded_file)
-                    sheet_to_display = st.selectbox("Selecciona una hoja para visualizar", xls.sheet_names)
+                    # Visualización simple
+                    xls_preview = pd.ExcelFile(uploaded_file)
+                    sheet_to_display = st.selectbox("Selecciona una hoja para visualizar", xls_preview.sheet_names)
                     if sheet_to_display:
-                        df = pd.read_excel(xls, sheet_name=sheet_to_display)
-                        st.dataframe(df) # Muestra el dataframe original tal como se lee
-                        
-                        # Guarda todo el contenido del excel para procesarlo, aplicando la corrección
-                        full_excel_text = []
-                        for name in xls.sheet_names:
-                            sheet_df = pd.read_excel(xls, sheet_name=name)
-                            if not sheet_df.empty:
-                                # --- LÍNEA CLAVE DE LA CORRECCIÓN ---
-                                # Rellena las celdas vacías (NaN) con el valor de la celda superior
-                                sheet_df.fillna(method='ffill', inplace=True)
-                                
-                                full_excel_text.append(f"## Hoja: {name}\n\n{sheet_df.to_markdown(index=False)}\n\n")
-                        st.session_state.original_content = "".join(full_excel_text)
+                        df_preview = pd.read_excel(xls_preview, sheet_name=sheet_to_display)
+                        st.dataframe(df_preview)
+                    
+                    # Procesa el archivo para la IA en segundo plano
+                    st.session_state.original_content = process_excel_file(uploaded_file)
                 except Exception as e:
                     st.error(f"Error al leer el archivo: {e}")
 
@@ -106,7 +137,6 @@ with col2:
             height=500,
             key="editor"
         )
-        # Actualiza el estado si el usuario edita manualmente
         st.session_state.structured_text = edited_text
 
         st.download_button(
@@ -122,19 +152,15 @@ with col3:
     with st.container(border=True):
         st.subheader("3. Asistente de Edición")
         
-        # Muestra el historial del chat
         for message in st.session_state.chat_history:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
 
-        # Entrada del usuario para el chat
         if instruction := st.chat_input("Da una instrucción para editar..."):
-            # Añade el mensaje del usuario al historial
             st.session_state.chat_history.append({"role": "user", "content": instruction})
             with st.chat_message("user"):
                 st.markdown(instruction)
 
-            # Llama a la IA para que edite el documento
             with st.spinner("✍️ La IA está editando el documento..."):
                 try:
                     model = genai.GenerativeModel('gemini-1.5-flash-latest')
@@ -152,10 +178,9 @@ with col3:
                     """
                     response = model.generate_content(prompt)
                     
-                    # Actualiza el editor con el nuevo texto y limpia el historial para la próxima tarea
                     st.session_state.structured_text = response.text
-                    st.session_state.chat_history = [] # Limpia el historial para la siguiente instrucción
-                    st.rerun() # Refresca la app para mostrar los cambios en el editor
+                    st.session_state.chat_history = []
+                    st.rerun()
 
                 except Exception as e:
                     st.error(f"Error al editar con la IA: {e}")
