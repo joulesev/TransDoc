@@ -2,7 +2,7 @@ import streamlit as st
 import google.generativeai as genai
 import pandas as pd
 import io
-from openpyxl import load_workbook
+import openpyxl
 
 # --- CONFIGURACIÓN DE PANDAS ---
 pd.set_option('display.max_rows', None)
@@ -23,45 +23,39 @@ except (KeyError, FileNotFoundError):
     st.warning("Por favor, configura el 'Secreto' de Streamlit llamado `GEMINI_API_KEY`.")
     st.stop()
 
-# --- NUEVA FUNCIÓN DE PROCESAMIENTO INTELIGENTE ---
-def process_excel_file(uploaded_file):
+# --- FUNCIÓN DE PREPROCESAMIENTO DE EXCEL (CORREGIDA) ---
+def preprocess_excel_merges(uploaded_file):
     """
-    Lee un archivo Excel, detecta las celdas combinadas, las rellena de forma inteligente
-    y devuelve el contenido completo como texto Markdown.
+    Lee un archivo Excel en memoria, detecta las celdas combinadas,
+    rellena los valores y devuelve el archivo corregido en memoria.
     """
-    # Carga el libro de trabajo con openpyxl para leer la estructura
-    wb = load_workbook(uploaded_file, read_only=True)
-    xls = pd.ExcelFile(uploaded_file)
+    # Carga el libro de trabajo, forzando el modo que permite leer la estructura de celdas combinadas.
+    wb = openpyxl.load_workbook(uploaded_file, data_only=True)
     
-    full_excel_text = []
-
-    for sheet_name in xls.sheet_names:
+    for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
-        df = pd.read_excel(xls, sheet_name=sheet_name, header=None) # Leer sin cabecera para alinear índices
-
-        # Obtiene el mapa de celdas combinadas
-        merged_ranges = ws.merged_cells.ranges
-
-        # Aplica el relleno inteligente
-        for merged_range in merged_ranges:
-            # Obtiene los límites del rango (min_col, min_row, max_col, max_row)
-            # Los índices de openpyxl empiezan en 1, los de pandas en 0
-            min_col, min_row, max_col, max_row = merged_range.bounds
-            top_left_cell_value = df.iloc[min_row - 1, min_col - 1]
-            
-            # Rellena el rango en el DataFrame
-            df.iloc[min_row - 1:max_row, min_col - 1:max_col] = top_left_cell_value
         
-        # Asigna la primera fila como cabecera y elimina la fila original
-        df.columns = df.iloc[0]
-        df = df[1:]
-        df.reset_index(drop=True, inplace=True)
-
-        if not df.empty:
-            full_excel_text.append(f"## Hoja: {sheet_name}\n\n{df.to_markdown(index=False)}\n\n")
+        # Crea una copia de la lista de rangos para iterar de forma segura
+        merged_ranges = list(ws.merged_cells.ranges)
+        
+        for merged_cell_range in merged_ranges:
+            # Des-combina las celdas para poder escribir en ellas
+            ws.unmerge_cells(str(merged_cell_range))
             
-    return "".join(full_excel_text)
+            # Obtiene la celda superior izquierda que contiene el valor
+            top_left_cell = merged_cell_range.min_row, merged_cell_range.min_col
+            value = ws.cell(row=top_left_cell[0], column=top_left_cell[1]).value
+            
+            # Rellena todas las celdas del rango original con ese valor
+            for row in range(merged_cell_range.min_row, merged_cell_range.max_row + 1):
+                for col in range(merged_cell_range.min_col, merged_cell_range.max_col + 1):
+                    ws.cell(row=row, column=col).value = value
 
+    # Guarda el libro de trabajo corregido en un objeto de bytes en memoria
+    corrected_file_in_memory = io.BytesIO()
+    wb.save(corrected_file_in_memory)
+    corrected_file_in_memory.seek(0) # Rebobina al principio del archivo
+    return corrected_file_in_memory
 
 # --- INICIALIZACIÓN DEL ESTADO DE LA SESIÓN ---
 if 'original_content' not in st.session_state:
@@ -77,11 +71,9 @@ st.markdown("Sube o pega tu contenido, visualízalo, edítalo y usa un asistente
 
 col1, col2, col3 = st.columns([1, 1, 1])
 
-# --- COLUMNA 1: ENTRADA Y VISUALIZACIÓN ---
 with col1:
     with st.container(border=True):
         st.subheader("1. Carga y Visualiza")
-        
         input_method_tab, file_upload_tab = st.tabs(["Pegar Texto", "Subir Archivo Excel"])
 
         with input_method_tab:
@@ -93,15 +85,21 @@ with col1:
             uploaded_file = st.file_uploader("Sube un archivo .xlsx", type=['xlsx'])
             if uploaded_file:
                 try:
-                    # Visualización simple
-                    xls_preview = pd.ExcelFile(uploaded_file)
-                    sheet_to_display = st.selectbox("Selecciona una hoja para visualizar", xls_preview.sheet_names)
-                    if sheet_to_display:
-                        df_preview = pd.read_excel(xls_preview, sheet_name=sheet_to_display)
-                        st.dataframe(df_preview)
+                    # Preprocesa el archivo para manejar celdas combinadas
+                    corrected_file = preprocess_excel_merges(uploaded_file)
                     
-                    # Procesa el archivo para la IA en segundo plano
-                    st.session_state.original_content = process_excel_file(uploaded_file)
+                    xls = pd.ExcelFile(corrected_file)
+                    sheet_to_display = st.selectbox("Selecciona una hoja para visualizar", xls.sheet_names)
+                    if sheet_to_display:
+                        df = pd.read_excel(xls, sheet_name=sheet_to_display)
+                        st.dataframe(df)
+                        
+                        full_excel_text = []
+                        for name in xls.sheet_names:
+                            sheet_df = pd.read_excel(xls, sheet_name=name)
+                            if not sheet_df.empty:
+                                full_excel_text.append(f"## Hoja: {name}\n\n{sheet_df.to_markdown(index=False)}\n\n")
+                        st.session_state.original_content = "".join(full_excel_text)
                 except Exception as e:
                     st.error(f"Error al leer el archivo: {e}")
 
@@ -126,11 +124,9 @@ with col1:
             else:
                 st.warning("Por favor, pega texto o sube un archivo.")
 
-# --- COLUMNA 2: EDITOR DE MARKDOWN ---
 with col2:
     with st.container(border=True):
         st.subheader("2. Edita el Resultado")
-        
         edited_text = st.text_area(
             "Puedes editar el texto directamente aquí",
             value=st.session_state.structured_text,
@@ -138,7 +134,6 @@ with col2:
             key="editor"
         )
         st.session_state.structured_text = edited_text
-
         st.download_button(
             label="📥 Descargar Archivo .md",
             data=st.session_state.structured_text,
@@ -147,20 +142,16 @@ with col2:
             use_container_width=True
         )
 
-# --- COLUMNA 3: ASISTENTE DE IA ---
 with col3:
     with st.container(border=True):
         st.subheader("3. Asistente de Edición")
-        
         for message in st.session_state.chat_history:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
-
         if instruction := st.chat_input("Da una instrucción para editar..."):
             st.session_state.chat_history.append({"role": "user", "content": instruction})
             with st.chat_message("user"):
                 st.markdown(instruction)
-
             with st.spinner("✍️ La IA está editando el documento..."):
                 try:
                     model = genai.GenerativeModel('gemini-1.5-flash-latest')
@@ -177,10 +168,9 @@ with col3:
                     --- FIN DE LA INSTRUCCIÓN ---
                     """
                     response = model.generate_content(prompt)
-                    
                     st.session_state.structured_text = response.text
                     st.session_state.chat_history = []
                     st.rerun()
-
                 except Exception as e:
                     st.error(f"Error al editar con la IA: {e}")
+                    
