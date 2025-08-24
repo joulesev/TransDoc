@@ -60,12 +60,19 @@ with col1:
                         df = pd.read_excel(xls, sheet_name=sheet_to_display)
                         st.dataframe(df)
                         # Guarda todo el contenido del excel para procesarlo
-                        full_excel_text = []
+                        full_excel_text_parts = []
                         for name in xls.sheet_names:
                             sheet_df = pd.read_excel(xls, sheet_name=name)
                             if not sheet_df.empty:
-                                full_excel_text.append(f"## Hoja: {name}\n\n{sheet_df.to_markdown(index=False)}\n\n")
-                        st.session_state.original_content = "".join(full_excel_text)
+                                full_excel_text_parts.append(f"## Hoja: {name}\n\n{sheet_df.to_markdown(index=False)}\n\n")
+                        
+                        full_excel_text = "".join(full_excel_text_parts)
+                        
+                        # --- FILTRO DE SANEAMIENTO AÑADIDO ---
+                        # Elimina líneas de resumen conocidas que pueden ser insertadas por herramientas externas.
+                        summary_line_to_remove = "*(Se omitieron filas repetitivas para brevedad. El total de llegadas se muestra al final.)*"
+                        st.session_state.original_content = full_excel_text.replace(summary_line_to_remove, "")
+
                 except Exception as e:
                     st.error(f"Error al leer el archivo: {e}")
 
