@@ -2,9 +2,10 @@ import streamlit as st
 import google.generativeai as genai
 import pandas as pd
 import io
+import json
+import re
 
 # --- CONFIGURACIÓN DE PANDAS ---
-# Le damos la orden a pandas de que nunca oculte filas NI TRUNQUE EL TEXTO en las columnas.
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_colwidth', None)
 
@@ -24,103 +25,105 @@ except (KeyError, FileNotFoundError):
     st.stop()
 
 # --- INICIALIZACIÓN DEL ESTADO DE LA SESIÓN ---
-if 'original_content' not in st.session_state:
-    st.session_state.original_content = ""
 if 'structured_text' not in st.session_state:
     st.session_state.structured_text = "El resultado estructurado por la IA aparecerá aquí..."
-if 'chat_history' not in st.session_state:
-    st.session_state.chat_history = []
 
 # --- INTERFAZ DE LA APLICACIÓN ---
 st.title("🛠️ Taller de Estructuración de Datos para IA (RAG)")
-st.markdown("Sube o pega tu contenido, visualízalo, edítalo y usa un asistente de IA para refinarlo. Finalmente, descarga tu documento en formato Markdown.")
+st.markdown("Sube un archivo de Excel, selecciona una hoja y la IA la limpiará y analizará en dos pasos para garantizar un resultado completo y preciso.")
 
-# --- PANELES PRINCIPALES ---
-col1, col2, col3 = st.columns([1, 1, 1])
+col1, col2 = st.columns(2, gap="large")
 
-# --- COLUMNA 1: ENTRADA Y VISUALIZACIÓN ---
 with col1:
     with st.container(border=True):
-        st.subheader("1. Carga y Visualiza")
+        st.subheader("1. Carga y Procesa por Hoja")
         
-        input_method_tab, file_upload_tab = st.tabs(["Pegar Texto", "Subir Archivo Excel"])
-
-        with input_method_tab:
-            text_input = st.text_area("Pega texto sin formato aquí", height=150)
-            if text_input:
-                st.session_state.original_content = text_input
-
-        with file_upload_tab:
-            uploaded_file = st.file_uploader("Sube un archivo .xlsx", type=['xlsx'])
-            if uploaded_file:
-                try:
-                    xls = pd.ExcelFile(uploaded_file)
-                    sheet_to_display = st.selectbox("Selecciona una hoja para visualizar", xls.sheet_names)
-                    if sheet_to_display:
-                        df = pd.read_excel(xls, sheet_name=sheet_to_display)
-                        st.dataframe(df)
-                        # Guarda todo el contenido del excel para procesarlo, SIN pre-procesamiento.
-                        full_excel_text = []
-                        for name in xls.sheet_names:
-                            sheet_df = pd.read_excel(xls, sheet_name=name)
-                            if not sheet_df.empty:
-                                full_excel_text.append(f"## Hoja: {name}\n\n{sheet_df.to_markdown(index=False)}\n\n")
-                        st.session_state.original_content = "".join(full_excel_text)
-                except Exception as e:
-                    st.error(f"Error al leer el archivo: {e}")
-
-        if st.button("Procesar y Estructurar", use_container_width=True, type="primary"):
-            if st.session_state.original_content:
-                with st.spinner("🤖 Estructurando el documento inicial..."):
-                    try:
-                        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        uploaded_file = st.file_uploader("Sube un archivo .xlsx", type=['xlsx'])
+        if uploaded_file:
+            try:
+                xls = pd.ExcelFile(uploaded_file)
+                sheet_to_process = st.selectbox("Selecciona una hoja para visualizar y procesar", xls.sheet_names)
+                
+                if sheet_to_process:
+                    df = pd.read_excel(xls, sheet_name=sheet_to_process)
+                    st.dataframe(df, height=350)
+                    
+                    if st.button(f"Procesar Hoja '{sheet_to_process}'", use_container_width=True, type="primary"):
+                        # --- INICIO DEL PROCESO DE DOS PASOS ---
                         
-                        # --- PROMPT MEJORADO ---
-                        # Le enseñamos a la IA a manejar las celdas combinadas.
-                        prompt = f"""
-                        Tu tarea es actuar como un experto analista de datos.
-                        Analiza el siguiente texto, que proviene de un archivo Excel.
+                        # PASO 1: LIMPIEZA DE DATOS POR IA
+                        with st.spinner("Paso 1/2: La IA está limpiando los datos (celdas combinadas)..."):
+                            try:
+                                # Convierte la hoja a JSON, preservando los nulos
+                                sheet_json_raw = df.to_json(orient='records', indent=2)
+                                model_cleaner = genai.GenerativeModel('gemini-1.5-flash-latest')
+                                
+                                prompt_cleaner = f"""
+                                Tu única tarea es limpiar los siguientes datos JSON. Los datos provienen de un Excel con celdas combinadas, lo que genera valores `null`.
+                                Debes rellenar cada valor `null` con el último valor no nulo que apareció en la misma columna en una fila anterior.
+                                Devuelve **únicamente el objeto JSON completo y limpio**, envuelto en un bloque de código ```json ... ```. No añadas ninguna explicación.
 
-                        
-                        
-                        IMPORTANTE: El texto puede contener filas con datos faltantes. Esto se debe a que en el Excel original, hay celdas estaban combinadas.
-                        Tu primer paso es rellenar los huecos en esas celdas combinadas con la informacion en la celda de la primera fila de ese grupo de celdas combinadas.
-                        No omitas ningun dato.
+                                --- DATOS JSON CRUDOS ---
+                                {sheet_json_raw}
+                                --- FIN DE LOS DATOS ---
+                                """
+                                
+                                response_cleaner = model_cleaner.generate_content(prompt_cleaner)
+                                
+                                # Extraer el JSON limpio de la respuesta
+                                clean_json_match = re.search(r"```json\n(.*)\n```", response_cleaner.text, re.DOTALL)
+                                if not clean_json_match:
+                                    raise ValueError("La IA no devolvió un JSON limpio válido en el Paso 1.")
+                                
+                                clean_json_str = clean_json_match.group(1)
+                                clean_data = json.loads(clean_json_str)
+                                st.success("Paso 1/2: Datos limpiados con éxito.")
 
-                        Repite el procedimiento para cada "hoja" en el documento.
+                            except Exception as e:
+                                st.error(f"Error en el Paso 1 (Limpieza): {e}")
+                                st.stop()
 
-                        Una vez que hayas reconstruido la información completa,reestructura el contenido en un formato Markdown claro y útil.
+                        # PASO 2: ANÁLISIS Y ESTRUCTURACIÓN
+                        with st.spinner("Paso 2/2: La IA está analizando los datos limpios..."):
+                            try:
+                                model_analyst = genai.GenerativeModel('gemini-1.5-flash-latest')
+                                prompt_analyst = f"""
+                                Tu tarea es actuar como un experto analista de datos.
+                                A continuación se presenta un conjunto de datos JSON perfectamente limpios. Analízalos en su totalidad.
 
-                        
-                        Crea un título general, un resumen ejecutivo conciso y secciones lógicas para cada hoja o tema.
-                        Resalta los datos más importantes en negrita.
+                                Genera un documento en formato Markdown que sea un resumen detallado y bien estructurado de esos datos.
+                                - Crea un título descriptivo.
+                                - Escribe un resumen ejecutivo conciso.
+                                - Crea secciones lógicas si es apropiado.
+                                - Resalta los datos más importantes en negrita.
+                                - **Es crucial que no omitas ninguna fila o dato en tu análisis final.**
 
-                        --- TEXTO ORIGINAL (CON POSIBLES HUECOS) ---
-                        {st.session_state.original_content}
-                        --- FIN DEL TEXTO ---
-                        """
-                        response = model.generate_content(prompt)
-                        st.session_state.structured_text = response.text
-                        st.success("¡Documento estructurado!")
-                    except Exception as e:
-                        st.error(f"Error en la estructuración inicial: {e}")
-            else:
-                st.warning("Por favor, pega texto o sube un archivo.")
+                                --- DATOS JSON LIMPIOS ---
+                                {json.dumps(clean_data, indent=2)}
+                                --- FIN DE LOS DATOS ---
+                                """
+                                response_analyst = model_analyst.generate_content(prompt_analyst)
+                                st.session_state.structured_text = response_analyst.text
+                                st.success("Paso 2/2: ¡Análisis completado!")
+                            
+                            except Exception as e:
+                                st.error(f"Error en el Paso 2 (Análisis): {e}")
+                                st.stop()
 
-# --- COLUMNA 2: EDITOR DE MARKDOWN ---
+            except Exception as e:
+                st.error(f"Error al leer el archivo: {e}")
+
 with col2:
     with st.container(border=True):
-        st.subheader("2. Edita el Resultado")
-        
+        st.subheader("2. Edita y Descarga el Resultado")
         edited_text = st.text_area(
             "Puedes editar el texto directamente aquí",
             value=st.session_state.structured_text,
-            height=500,
+            height=450,
             key="editor"
         )
-        # Actualiza el estado si el usuario edita manualmente
         st.session_state.structured_text = edited_text
-
+        
         st.download_button(
             label="📥 Descargar Archivo .md",
             data=st.session_state.structured_text,
@@ -128,46 +131,3 @@ with col2:
             mime="text/markdown",
             use_container_width=True
         )
-
-# --- COLUMNA 3: ASISTENTE DE IA ---
-with col3:
-    with st.container(border=True):
-        st.subheader("3. Asistente de Edición")
-        
-        # Muestra el historial del chat
-        for message in st.session_state.chat_history:
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
-
-        # Entrada del usuario para el chat
-        if instruction := st.chat_input("Da una instrucción para editar..."):
-            # Añade el mensaje del usuario al historial
-            st.session_state.chat_history.append({"role": "user", "content": instruction})
-            with st.chat_message("user"):
-                st.markdown(instruction)
-
-            # Llama a la IA para que edite el documento
-            with st.spinner("✍️ La IA está editando el documento..."):
-                try:
-                    model = genai.GenerativeModel('gemini-1.5-flash-latest')
-                    prompt = f"""
-                    Actúa como un editor de documentos. Tu tarea es modificar el 'DOCUMENTO ACTUAL' basándote en la 'INSTRUCCIÓN DEL USUARIO'.
-                    Debes devolver el **documento completo y modificado**, no solo una respuesta a la instrucción.
-
-                    --- DOCUMENTO ACTUAL ---
-                    {st.session_state.structured_text}
-                    --- FIN DEL DOCUMENTO ---
-
-                    --- INSTRUCCIÓN DEL USUARIO ---
-                    {instruction}
-                    --- FIN DE LA INSTRUCCIÓN ---
-                    """
-                    response = model.generate_content(prompt)
-                    
-                    # Actualiza el editor con el nuevo texto y limpia el historial para la próxima tarea
-                    st.session_state.structured_text = response.text
-                    st.session_state.chat_history = [] # Limpia el historial para la siguiente instrucción
-                    st.rerun() # Refresca la app para mostrar los cambios en el editor
-
-                except Exception as e:
-                    st.error(f"Error al editar con la IA: {e}")
